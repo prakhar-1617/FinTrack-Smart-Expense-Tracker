@@ -5,8 +5,8 @@ const Transaction = require('../models/Transaction');
  */
 class AIService {
   /**
-   * Linear Regression Model: y = mx + b
-   * Calculates next month's predicted spending and a confidence score based on R²
+   * Linear Regression Model: y = mx + c (Ordinary Least Squares)
+   * Calculates next month's predicted spending, slope, intercept, and dynamic R² confidence score
    */
   async predictNextMonth(userId) {
     const now = new Date();
@@ -20,26 +20,60 @@ class AIService {
       data.push(txns.reduce((s, t) => s + t.amount, 0));
     }
 
-    // Need at least 3 months of history
+    // Need at least 3 months with data
     const monthsWithData = data.filter(v => v > 0).length;
     if (monthsWithData < 3) {
       return { success: false, code: 'insufficient_data', message: 'Need at least 3 months of history for a prediction.' };
     }
 
-    // Simple average prediction for student project
-    const totalSpent = data.reduce((a, b) => a + b, 0);
-    const average = totalSpent / monthsWithData;
-    const prediction = Math.round(average * 100) / 100;
+    // Ordinary Least Squares (OLS) Linear Regression: y = mx + c
+    // x = month index (1, 2, 3, 4, 5, 6), y = total monthly expense
+    const n = data.length; // 6 time data points
+    let sumX = 0, sumY = 0, sumXY = 0, sumXX = 0, sumYY = 0;
 
-    // Determine basic trend
-    const recentAvg = (data[4] + data[5]) / 2;
-    const pastAvg = (data[0] + data[1] + data[2]) / 3;
-    const trend = recentAvg > pastAvg ? "increasing" : "decreasing";
+    for (let i = 0; i < n; i++) {
+      const x = i + 1; // Month 1 to 6
+      const y = data[i];
+      sumX += x;
+      sumY += y;
+      sumXY += x * y;
+      sumXX += x * x;
+      sumYY += y * y;
+    }
+
+    // Slope (m) = (N*Σ(xy) - Σx*Σy) / (N*Σ(x²) - (Σx)²)
+    const denominator = (n * sumXX - sumX * sumX);
+    const m = denominator !== 0 ? (n * sumXY - sumX * sumY) / denominator : 0;
+
+    // Intercept (c) = (Σy - m*Σx) / N
+    const c = (sumY - m * sumX) / n;
+
+    // Predict for Month 7 (x = 7)
+    const nextMonthX = 7;
+    let prediction = m * nextMonthX + c;
+    if (prediction < 0) prediction = 0; // Spending cannot be negative
+
+    // Calculate R² (Coefficient of Determination) for confidence score
+    const meanY = sumY / n;
+    let ssTot = 0, ssRes = 0;
+    for (let i = 0; i < n; i++) {
+      const x = i + 1;
+      const y = data[i];
+      const yPred = m * x + c;
+      ssTot += Math.pow(y - meanY, 2);
+      ssRes += Math.pow(y - yPred, 2);
+    }
+    const rSquared = ssTot === 0 ? 1 : Math.max(0, 1 - (ssRes / ssTot));
+    const confidence = Math.max(70, Math.min(95, Math.round(rSquared * 100)));
+
+    const trend = m > 0 ? "increasing" : "decreasing";
 
     return {
       success: true,
-      predicted: prediction,
-      confidence: 85, // Dummy confidence score for simplicity
+      predicted: Math.round(prediction * 100) / 100,
+      slope: Math.round(m * 100) / 100,
+      intercept: Math.round(c * 100) / 100,
+      confidence: confidence,
       historicalData: data,
       trend: trend
     };
